@@ -1,5 +1,5 @@
 [package]
-name = "mbox-to-text"
+name = "gmail-to-rag"
 version = "0.1.0"
 edition = "2021"
 
