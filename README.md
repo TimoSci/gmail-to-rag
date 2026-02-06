@@ -31,7 +31,7 @@ source ~/.zshrc`
 `cargo build --release`
 
 ## 3. Run it against your mbox file
-`./target/release/mbox-to-text /path/to/your/mail.mbox ./emails`
+`./target/release/gmail-to-rag /path/to/your/mail.mbox ./emails`
 
 ## 4. Import into Open WebUI
 
