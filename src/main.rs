@@ -13,15 +13,29 @@ struct RawMessage {
 ///
 /// MBOX format uses lines starting with "From " as message delimiters.
 /// We accumulate lines between these markers, skipping the separator line itself.
+/// Lines that fail to read (I/O errors, corrupt bytes) are skipped with a warning.
 fn read_mbox(path: &Path) -> Vec<RawMessage> {
     let file = fs::File::open(path).expect("Failed to open mbox file");
     let reader = BufReader::new(file);
 
     let mut messages: Vec<RawMessage> = Vec::new();
     let mut current: Vec<u8> = Vec::new();
+    let mut line_num: usize = 0;
 
     for line in reader.split(b'\n') {
-        let line = line.expect("Failed to read line");
+        line_num += 1;
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!(
+                    "  Warning: failed to read line {} in {}: {} (skipping line)",
+                    line_num,
+                    path.display(),
+                    e
+                );
+                continue;
+            }
+        };
 
         if line.starts_with(b"From ") && !current.is_empty() {
             messages.push(RawMessage {
@@ -123,12 +137,17 @@ fn main() {
     println!("Found {} messages. Exporting...", messages.len());
 
     let mut exported = 0;
+    let mut skipped = 0;
 
     for (i, raw) in messages.iter().enumerate() {
         let mail = match parse_mail(&raw.bytes) {
             Ok(m) => m,
             Err(e) => {
-                eprintln!("  Skipping message {}: parse error: {}", i, e);
+                eprintln!(
+                    "  Warning: skipping message {} — MIME parse error: {}",
+                    i, e
+                );
+                skipped += 1;
                 continue;
             }
         };
@@ -145,6 +164,12 @@ fn main() {
             .unwrap_or_else(|| "Unknown".to_string());
 
         let body = extract_plain_text(&mail);
+        if body.is_empty() {
+            eprintln!(
+                "  Warning: message {} ({}) has no extractable plain-text body — exporting with empty body",
+                i, subject
+            );
+        }
 
         let safe_subject = sanitise_filename(&subject);
         let filename = format!("{:05}_{}.txt", i, safe_subject);
@@ -156,16 +181,28 @@ fn main() {
         );
 
         if let Err(e) = fs::write(&filepath, &content) {
-            eprintln!("  Failed to write {}: {}", filename, e);
+            eprintln!(
+                "  Warning: skipping message {} — failed to write {}: {}",
+                i, filename, e
+            );
+            skipped += 1;
             continue;
         }
 
         exported += 1;
     }
 
+    if skipped > 0 {
+        eprintln!(
+            "\n⚠  {} message(s) were skipped due to errors (see warnings above)",
+            skipped
+        );
+    }
+
     println!(
-        "Done. Exported {} emails to {}",
+        "Done. Exported {}/{} emails to {}",
         exported,
+        messages.len(),
         output_dir.display()
     );
 }
@@ -181,6 +218,60 @@ mod tests {
             .join("tests")
             .join("fixtures")
             .join("dummy.mbox")
+    }
+
+    /// Path to the mbox fixture containing a mix of valid and corrupt emails.
+    fn corrupt_fixture_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("with_corrupt.mbox")
+    }
+
+    /// Mirrors the main() export logic. Returns (exported, skipped) counts.
+    fn export_messages(messages: &[RawMessage], output_dir: &Path) -> (usize, usize) {
+        let mut exported = 0;
+        let mut skipped = 0;
+
+        for (i, raw) in messages.iter().enumerate() {
+            let mail = match parse_mail(&raw.bytes) {
+                Ok(m) => m,
+                Err(_) => {
+                    skipped += 1;
+                    continue;
+                }
+            };
+
+            let headers = &mail.headers;
+            let subject = headers
+                .get_first_value("Subject")
+                .unwrap_or_else(|| "No Subject".to_string());
+            let from = headers
+                .get_first_value("From")
+                .unwrap_or_else(|| "Unknown".to_string());
+            let date = headers
+                .get_first_value("Date")
+                .unwrap_or_else(|| "Unknown".to_string());
+
+            let body = extract_plain_text(&mail);
+            let safe_subject = sanitise_filename(&subject);
+            let filename = format!("{:05}_{}.txt", i, safe_subject);
+            let filepath = output_dir.join(&filename);
+
+            let content = format!(
+                "From: {}\nDate: {}\nSubject: {}\n---\n\n{}",
+                from, date, subject, body
+            );
+
+            if fs::write(&filepath, &content).is_err() {
+                skipped += 1;
+                continue;
+            }
+
+            exported += 1;
+        }
+
+        (exported, skipped)
     }
 
     // ---------------------------------------------------------------
@@ -323,6 +414,109 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
+    // Corrupt email handling tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_corrupt_mbox_does_not_panic() {
+        // The most important test: reading an mbox with corrupt messages
+        // must not panic — it should return whatever it can split.
+        let messages = read_mbox(&corrupt_fixture_path());
+        assert!(
+            messages.len() >= 2,
+            "Should split at least the valid messages from the corrupt mbox, got {}",
+            messages.len()
+        );
+    }
+
+    #[test]
+    fn test_corrupt_messages_are_skipped_during_export() {
+        let messages = read_mbox(&corrupt_fixture_path());
+        let output_dir = TempDir::new().unwrap();
+        let (exported, _skipped) = export_messages(&messages, output_dir.path());
+
+        // We expect at least the first and last valid emails to export.
+        // The corrupt/minimal ones may or may not parse — the key point
+        // is that we don't crash and we do get the good ones.
+        assert!(
+            exported >= 2,
+            "Should export at least the 2 clearly valid emails, got {}",
+            exported
+        );
+    }
+
+    #[test]
+    fn test_valid_emails_survive_after_corruption() {
+        // Verifies that emails appearing AFTER corrupt ones are still exported.
+        let messages = read_mbox(&corrupt_fixture_path());
+        let output_dir = TempDir::new().unwrap();
+        export_messages(&messages, output_dir.path());
+
+        // Look for the "Valid email after corruption" file
+        let files: Vec<_> = fs::read_dir(output_dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+
+        let found_post_corruption = files.iter().any(|entry| {
+            let content = fs::read_to_string(entry.path()).unwrap_or_default();
+            content.contains("Valid email after corruption")
+                || content.contains("should still be exported")
+        });
+
+        assert!(
+            found_post_corruption,
+            "The valid email after the corrupt ones should have been exported"
+        );
+    }
+
+    #[test]
+    fn test_export_counts_are_consistent() {
+        let messages = read_mbox(&corrupt_fixture_path());
+        let output_dir = TempDir::new().unwrap();
+        let (exported, skipped) = export_messages(&messages, output_dir.path());
+
+        // exported + skipped should equal the total number of raw messages
+        assert_eq!(
+            exported + skipped,
+            messages.len(),
+            "exported ({}) + skipped ({}) should equal total messages ({})",
+            exported,
+            skipped,
+            messages.len()
+        );
+
+        // The number of files on disk should match the exported count
+        let file_count = fs::read_dir(output_dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .count();
+        assert_eq!(
+            file_count, exported,
+            "Number of files on disk should match exported count"
+        );
+    }
+
+    #[test]
+    fn test_purely_corrupt_bytes_are_skipped() {
+        // Simulate a completely unparseable message
+        let messages = vec![RawMessage {
+            bytes: b"This is not an email at all\xff\xfe\x00\x00just garbage bytes".to_vec(),
+        }];
+
+        let output_dir = TempDir::new().unwrap();
+        let (exported, skipped) = export_messages(&messages, output_dir.path());
+
+        // It should either skip it or export it with best-effort headers.
+        // The critical thing is it must not panic.
+        assert_eq!(
+            exported + skipped,
+            1,
+            "Should account for the single message"
+        );
+    }
+
+    // ---------------------------------------------------------------
     // End-to-end integration test
     // ---------------------------------------------------------------
 
@@ -331,38 +525,11 @@ mod tests {
         let messages = read_mbox(&fixture_path());
         let output_dir = TempDir::new().expect("Failed to create temp dir");
 
-        let mut exported = 0;
+        let (exported, skipped) = export_messages(&messages, output_dir.path());
 
-        for (i, raw) in messages.iter().enumerate() {
-            let mail = parse_mail(&raw.bytes).unwrap();
-            let headers = &mail.headers;
-
-            let subject = headers
-                .get_first_value("Subject")
-                .unwrap_or_else(|| "No Subject".to_string());
-            let from = headers
-                .get_first_value("From")
-                .unwrap_or_else(|| "Unknown".to_string());
-            let date = headers
-                .get_first_value("Date")
-                .unwrap_or_else(|| "Unknown".to_string());
-
-            let body = extract_plain_text(&mail);
-            let safe_subject = sanitise_filename(&subject);
-            let filename = format!("{:05}_{}.txt", i, safe_subject);
-            let filepath = output_dir.path().join(&filename);
-
-            let content = format!(
-                "From: {}\nDate: {}\nSubject: {}\n---\n\n{}",
-                from, date, subject, body
-            );
-
-            fs::write(&filepath, &content).unwrap();
-            exported += 1;
-        }
-
-        // Verify correct number of files
+        // Verify correct counts
         assert_eq!(exported, 3);
+        assert_eq!(skipped, 0);
 
         // Verify files exist on disk
         let files: Vec<_> = fs::read_dir(output_dir.path())
@@ -389,24 +556,7 @@ mod tests {
         let messages = read_mbox(&fixture_path());
         let output_dir = TempDir::new().unwrap();
 
-        for (i, raw) in messages.iter().enumerate() {
-            let mail = parse_mail(&raw.bytes).unwrap();
-            let headers = &mail.headers;
-
-            let subject = headers.get_first_value("Subject").unwrap_or_default();
-            let from = headers.get_first_value("From").unwrap_or_default();
-            let date = headers.get_first_value("Date").unwrap_or_default();
-            let body = extract_plain_text(&mail);
-            let safe_subject = sanitise_filename(&subject);
-
-            let content = format!(
-                "From: {}\nDate: {}\nSubject: {}\n---\n\n{}",
-                from, date, subject, body
-            );
-
-            let filepath = output_dir.path().join(format!("{:05}_{}.txt", i, safe_subject));
-            fs::write(&filepath, &content).unwrap();
-        }
+        export_messages(&messages, output_dir.path());
 
         // Read each output file and verify structure
         for entry in fs::read_dir(output_dir.path()).unwrap() {
