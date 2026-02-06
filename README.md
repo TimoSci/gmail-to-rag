@@ -25,13 +25,13 @@ source ~/.zshrc`
 # Usage
 
 ## 1. Navigate into the project
-cd gmail-to-rag
+`cd gmail-to-rag`
 
 ## 2. Build the release binary
-cargo build --release
+`cargo build --release`
 
 ## 3. Run it against your mbox file
-./target/release/mbox-to-text /path/to/your/mail.mbox ./emails
+`./target/release/mbox-to-text /path/to/your/mail.mbox ./emails`
 
 ## 4. Import into Open WebUI
 
