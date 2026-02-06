@@ -1,3 +1,17 @@
+# Gmail-To-RAG
+
+# About
+
+This ultra-fast parsing tool converts a Gmail Takeout `.mbox` archive 
+to a folder containig individual email `.txt` files, suitable for importing as
+a Retrieval-Augmented Generation (RAG) Knowledge in Open WebUI.
+
+see: https://docs.openwebui.com/
+
+Performance tested on an Apple M5. Takes ~10 seconds to parse a 7GB mbox archive 
+containing 50'000 emails.
+
+
 # Prerequisites 
 
 ## Rust
@@ -18,3 +32,7 @@ cargo build --release
 
 ## 3. Run it against your mbox file
 ./target/release/mbox-to-text /path/to/your/mail.mbox ./emails
+
+## 4. Import into Open WebUI
+
+Workspace > Knowledge Tab > Create Knowledge > Add Content > Upload Directory > [select `emails` directory created in step 3]
