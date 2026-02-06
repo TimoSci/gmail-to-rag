@@ -1,0 +1,89 @@
+From sender@example.com Mon Jan  6 10:00:00 2025
+From: Alice Johnson <alice@example.com>
+To: Bob Smith <bob@example.com>
+Subject: Q4 Budget Review
+Date: Mon, 06 Jan 2025 10:00:00 -0500
+Message-ID: <msg001@example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="UTF-8"
+
+Hi Bob,
+
+Just wanted to follow up on the Q4 budget review. The numbers look solid
+and we're on track to hit our targets. Let's schedule a call this week to
+discuss the allocation for next quarter.
+
+Key highlights:
+- Revenue up 12% YoY
+- Operating costs down 3%
+- Net margin improved to 18.5%
+
+Let me know your availability.
+
+Best,
+Alice
+
+From notifications@github.com Tue Jan  7 14:30:00 2025
+From: GitHub <notifications@github.com>
+To: dev@example.com
+Subject: [open-webui/open-webui] New issue: RAG upload fails on large PDFs (#4521)
+Date: Tue, 07 Jan 2025 14:30:00 +0000
+Message-ID: <msg002@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="boundary42"
+
+--boundary42
+Content-Type: text/plain; charset="UTF-8"
+
+A new issue has been opened by @janedoe:
+
+Title: RAG upload fails on large PDFs (#4521)
+
+When uploading PDF files larger than 50MB to a knowledge base,
+the upload silently fails. No error is shown in the UI, but the
+document never appears in the knowledge base.
+
+Steps to reproduce:
+1. Create a knowledge base
+2. Upload a PDF larger than 50MB
+3. Wait for processing
+4. Document is missing from the list
+
+Expected: Large PDFs should either upload successfully or show
+a clear error message with the size limit.
+
+--boundary42
+Content-Type: text/html; charset="UTF-8"
+
+<html>
+<body>
+<p>A new issue has been opened by <b>@janedoe</b>:</p>
+<h2>RAG upload fails on large PDFs (#4521)</h2>
+<p>When uploading PDF files larger than 50MB to a knowledge base,
+the upload silently fails.</p>
+</body>
+</html>
+
+--boundary42--
+
+From hr@bigcorp.com Wed Jan  8 09:15:00 2025
+From: HR Department <hr@bigcorp.com>
+To: all-staff@bigcorp.com
+Subject: =?UTF-8?B?8J+OiSBIb2xpZGF5IFBhcnR5IFJTVlAgLSBEb24ndCBNaXNzIE91dCE=?=
+Date: Wed, 08 Jan 2025 09:15:00 -0500
+Message-ID: <msg003@example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="UTF-8"
+
+Hello everyone!
+
+This is a reminder to RSVP for the annual holiday party.
+
+Date: Friday, January 17th
+Time: 6:00 PM - 10:00 PM
+Location: The Grand Ballroom, 123 Main St
+
+Please reply to this email with your +1 (if any) by end of day Wednesday.
+
+Cheers,
+The HR Team
