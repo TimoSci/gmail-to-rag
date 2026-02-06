@@ -25,7 +25,7 @@ source ~/.zshrc`
 # Usage
 
 ## 1. Navigate into the project
-cd mbox-to-text
+cd gmail-to-rag
 
 ## 2. Build the release binary
 cargo build --release
