@@ -1,0 +1,36 @@
+# mbox-to-text configuration
+# Place this file as config.toml next to the binary, or pass --config <path>
+
+[paths]
+# Default output directory (used when no output_dir argument is given)
+default_output_dir = "./emails"
+
+[output]
+# Output file extension
+file_extension = "txt"
+
+# Maximum length of the sanitised subject in the filename (characters)
+max_filename_length = 80
+
+# Output filename pattern. Available placeholders:
+#   {index}   — zero-padded message number (5 digits)
+#   {subject} — sanitised subject line
+#   {ext}     — file extension from file_extension above
+filename_pattern = "{index}_{subject}.{ext}"
+
+# Number of digits to zero-pad the index to
+index_padding = 5
+
+# Output file body template. Available placeholders:
+#   {from}    — sender
+#   {date}    — date header
+#   {subject} — raw (unsanitised) subject
+#   {body}    — extracted plain-text body
+# Use \n for newlines.
+file_template = "From: {from}\nDate: {date}\nSubject: {subject}\n---\n\n{body}"
+
+[fallbacks]
+# Fallback values when email headers are missing
+default_subject = "No Subject"
+default_from = "Unknown"
+default_date = "Unknown"

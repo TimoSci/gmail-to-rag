@@ -1,8 +1,148 @@
 use mailparse::{parse_mail, MailHeaderMap};
+use serde::Deserialize;
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+
+// ---------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct Config {
+    paths: PathsConfig,
+    output: OutputConfig,
+    fallbacks: FallbacksConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct PathsConfig {
+    default_output_dir: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct OutputConfig {
+    file_extension: String,
+    max_filename_length: usize,
+    filename_pattern: String,
+    index_padding: usize,
+    file_template: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct FallbacksConfig {
+    default_subject: String,
+    default_from: String,
+    default_date: String,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            paths: PathsConfig::default(),
+            output: OutputConfig::default(),
+            fallbacks: FallbacksConfig::default(),
+        }
+    }
+}
+
+impl Default for PathsConfig {
+    fn default() -> Self {
+        Self {
+            default_output_dir: "./emails".to_string(),
+        }
+    }
+}
+
+impl Default for OutputConfig {
+    fn default() -> Self {
+        Self {
+            file_extension: "txt".to_string(),
+            max_filename_length: 80,
+            filename_pattern: "{index}_{subject}.{ext}".to_string(),
+            index_padding: 5,
+            file_template: "From: {from}\nDate: {date}\nSubject: {subject}\n---\n\n{body}"
+                .to_string(),
+        }
+    }
+}
+
+impl Default for FallbacksConfig {
+    fn default() -> Self {
+        Self {
+            default_subject: "No Subject".to_string(),
+            default_from: "Unknown".to_string(),
+            default_date: "Unknown".to_string(),
+        }
+    }
+}
+
+impl Config {
+    /// Loads configuration from a TOML file. Falls back to defaults for any
+    /// missing fields. Returns the built-in defaults if the file doesn't exist.
+    fn load(path: &Path) -> Self {
+        if !path.exists() {
+            eprintln!(
+                "  Info: no config file at {} — using built-in defaults",
+                path.display()
+            );
+            return Self::default();
+        }
+
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!(
+                    "  Warning: could not read config file {}: {} — using defaults",
+                    path.display(),
+                    e
+                );
+                return Self::default();
+            }
+        };
+
+        match toml::from_str(&content) {
+            Ok(cfg) => {
+                println!("Loaded config from {}", path.display());
+                cfg
+            }
+            Err(e) => {
+                eprintln!(
+                    "  Warning: failed to parse config file {}: {} — using defaults",
+                    path.display(),
+                    e
+                );
+                Self::default()
+            }
+        }
+    }
+
+    /// Formats an output filename using the configured pattern.
+    fn format_filename(&self, index: usize, sanitised_subject: &str) -> String {
+        let padded_index = format!("{:0>width$}", index, width = self.output.index_padding);
+        self.output
+            .filename_pattern
+            .replace("{index}", &padded_index)
+            .replace("{subject}", sanitised_subject)
+            .replace("{ext}", &self.output.file_extension)
+    }
+
+    /// Formats the output file content using the configured template.
+    fn format_content(&self, from: &str, date: &str, subject: &str, body: &str) -> String {
+        self.output
+            .file_template
+            .replace("{from}", from)
+            .replace("{date}", date)
+            .replace("{subject}", subject)
+            .replace("{body}", body)
+            .replace("\\n", "\n")
+    }
+}
 
 /// Represents a single raw email extracted from an MBOX file.
 struct RawMessage {
@@ -87,8 +227,8 @@ fn extract_plain_text(mail: &mailparse::ParsedMail) -> String {
 /// Sanitises a string for use as a filename.
 ///
 /// Keeps only alphanumeric characters, spaces, hyphens, and underscores.
-/// Truncates to 80 characters.
-fn sanitise_filename(s: &str) -> String {
+/// Truncates to `max_length` characters.
+fn sanitise_filename(s: &str, max_length: usize) -> String {
     let cleaned: String = s
         .chars()
         .map(|c| {
@@ -100,29 +240,56 @@ fn sanitise_filename(s: &str) -> String {
         })
         .collect();
 
-    cleaned.chars().take(80).collect()
+    cleaned.chars().take(max_length).collect()
 }
 
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    if args.len() < 2 || args.len() > 3 {
-        eprintln!("Usage: mbox-to-text <path/to/mail.mbox> [output_dir]");
+    // Parse optional --config flag
+    let mut config_path: Option<PathBuf> = None;
+    let mut positional: Vec<&str> = Vec::new();
+
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--config" {
+            if i + 1 < args.len() {
+                config_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            } else {
+                eprintln!("Error: --config requires a path argument");
+                std::process::exit(1);
+            }
+        } else {
+            positional.push(&args[i]);
+            i += 1;
+        }
+    }
+
+    if positional.is_empty() || positional.len() > 2 {
+        eprintln!("Usage: mbox-to-text [--config config.toml] <path/to/mail.mbox> [output_dir]");
         eprintln!();
-        eprintln!("Converts a Gmail MBOX export into individual .txt files");
+        eprintln!("Converts a Gmail MBOX export into individual text files");
         eprintln!("suitable for uploading to Open WebUI as a RAG knowledge base.");
         eprintln!();
         eprintln!("Arguments:");
-        eprintln!("  <mbox_path>    Path to the .mbox file (required)");
-        eprintln!("  [output_dir]   Directory for output files (default: ./emails)");
+        eprintln!("  <mbox_path>            Path to the .mbox file (required)");
+        eprintln!("  [output_dir]           Directory for output files (default from config)");
+        eprintln!();
+        eprintln!("Options:");
+        eprintln!("  --config <path>        Path to config.toml (default: ./config.toml)");
         std::process::exit(1);
     }
 
-    let mbox_path = PathBuf::from(&args[1]);
-    let output_dir = if args.len() == 3 {
-        PathBuf::from(&args[2])
+    // Load config: explicit --config path > ./config.toml > built-in defaults
+    let config_file = config_path.unwrap_or_else(|| PathBuf::from("./config.toml"));
+    let config = Config::load(&config_file);
+
+    let mbox_path = PathBuf::from(positional[0]);
+    let output_dir = if positional.len() == 2 {
+        PathBuf::from(positional[1])
     } else {
-        PathBuf::from("./emails")
+        PathBuf::from(&config.paths.default_output_dir)
     };
 
     if !mbox_path.exists() {
@@ -155,13 +322,13 @@ fn main() {
         let headers = &mail.headers;
         let subject = headers
             .get_first_value("Subject")
-            .unwrap_or_else(|| "No Subject".to_string());
+            .unwrap_or_else(|| config.fallbacks.default_subject.clone());
         let from = headers
             .get_first_value("From")
-            .unwrap_or_else(|| "Unknown".to_string());
+            .unwrap_or_else(|| config.fallbacks.default_from.clone());
         let date = headers
             .get_first_value("Date")
-            .unwrap_or_else(|| "Unknown".to_string());
+            .unwrap_or_else(|| config.fallbacks.default_date.clone());
 
         let body = extract_plain_text(&mail);
         if body.is_empty() {
@@ -171,14 +338,10 @@ fn main() {
             );
         }
 
-        let safe_subject = sanitise_filename(&subject);
-        let filename = format!("{:05}_{}.txt", i, safe_subject);
+        let safe_subject = sanitise_filename(&subject, config.output.max_filename_length);
+        let filename = config.format_filename(i, &safe_subject);
         let filepath = output_dir.join(&filename);
-
-        let content = format!(
-            "From: {}\nDate: {}\nSubject: {}\n---\n\n{}",
-            from, date, subject, body
-        );
+        let content = config.format_content(&from, &date, &subject, &body);
 
         if let Err(e) = fs::write(&filepath, &content) {
             eprintln!(
@@ -228,8 +391,16 @@ mod tests {
             .join("with_corrupt.mbox")
     }
 
-    /// Mirrors the main() export logic. Returns (exported, skipped) counts.
+    /// Mirrors the main() export logic using a Config. Returns (exported, skipped) counts.
     fn export_messages(messages: &[RawMessage], output_dir: &Path) -> (usize, usize) {
+        export_messages_with_config(messages, output_dir, &Config::default())
+    }
+
+    fn export_messages_with_config(
+        messages: &[RawMessage],
+        output_dir: &Path,
+        config: &Config,
+    ) -> (usize, usize) {
         let mut exported = 0;
         let mut skipped = 0;
 
@@ -245,23 +416,19 @@ mod tests {
             let headers = &mail.headers;
             let subject = headers
                 .get_first_value("Subject")
-                .unwrap_or_else(|| "No Subject".to_string());
+                .unwrap_or_else(|| config.fallbacks.default_subject.clone());
             let from = headers
                 .get_first_value("From")
-                .unwrap_or_else(|| "Unknown".to_string());
+                .unwrap_or_else(|| config.fallbacks.default_from.clone());
             let date = headers
                 .get_first_value("Date")
-                .unwrap_or_else(|| "Unknown".to_string());
+                .unwrap_or_else(|| config.fallbacks.default_date.clone());
 
             let body = extract_plain_text(&mail);
-            let safe_subject = sanitise_filename(&subject);
-            let filename = format!("{:05}_{}.txt", i, safe_subject);
+            let safe_subject = sanitise_filename(&subject, config.output.max_filename_length);
+            let filename = config.format_filename(i, &safe_subject);
             let filepath = output_dir.join(&filename);
-
-            let content = format!(
-                "From: {}\nDate: {}\nSubject: {}\n---\n\n{}",
-                from, date, subject, body
-            );
+            let content = config.format_content(&from, &date, &subject, &body);
 
             if fs::write(&filepath, &content).is_err() {
                 skipped += 1;
@@ -272,6 +439,91 @@ mod tests {
         }
 
         (exported, skipped)
+    }
+
+    // ---------------------------------------------------------------
+    // Config tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_default_config_values() {
+        let config = Config::default();
+        assert_eq!(config.paths.default_output_dir, "./emails");
+        assert_eq!(config.output.file_extension, "txt");
+        assert_eq!(config.output.max_filename_length, 80);
+        assert_eq!(config.output.index_padding, 5);
+        assert_eq!(config.fallbacks.default_subject, "No Subject");
+        assert_eq!(config.fallbacks.default_from, "Unknown");
+        assert_eq!(config.fallbacks.default_date, "Unknown");
+    }
+
+    #[test]
+    fn test_config_format_filename() {
+        let config = Config::default();
+        let result = config.format_filename(42, "Hello World");
+        assert_eq!(result, "00042_Hello World.txt");
+    }
+
+    #[test]
+    fn test_config_format_filename_custom_pattern() {
+        let mut config = Config::default();
+        config.output.filename_pattern = "email-{index}-{subject}.{ext}".to_string();
+        config.output.index_padding = 3;
+        config.output.file_extension = "md".to_string();
+
+        let result = config.format_filename(7, "Test");
+        assert_eq!(result, "email-007-Test.md");
+    }
+
+    #[test]
+    fn test_config_format_content() {
+        let config = Config::default();
+        let result = config.format_content("alice@test.com", "2025-01-01", "Hi", "Hello!");
+        assert!(result.starts_with("From: alice@test.com\n"));
+        assert!(result.contains("Subject: Hi\n"));
+        assert!(result.contains("---\n\n"));
+        assert!(result.ends_with("Hello!"));
+    }
+
+    #[test]
+    fn test_config_format_content_custom_template() {
+        let mut config = Config::default();
+        config.output.file_template =
+            "# {subject}\\n\\nFrom {from} on {date}\\n\\n{body}".to_string();
+
+        let result = config.format_content("alice@test.com", "2025-01-01", "Hi", "Hello!");
+        assert_eq!(result, "# Hi\n\nFrom alice@test.com on 2025-01-01\n\nHello!");
+    }
+
+    #[test]
+    fn test_config_load_missing_file_returns_defaults() {
+        let config = Config::load(Path::new("/nonexistent/config.toml"));
+        assert_eq!(config.paths.default_output_dir, "./emails");
+        assert_eq!(config.output.max_filename_length, 80);
+    }
+
+    #[test]
+    fn test_config_load_partial_toml() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("partial.toml");
+        fs::write(
+            &config_path,
+            r#"
+[output]
+file_extension = "md"
+max_filename_length = 50
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load(&config_path);
+        // Overridden values
+        assert_eq!(config.output.file_extension, "md");
+        assert_eq!(config.output.max_filename_length, 50);
+        // Remaining defaults preserved
+        assert_eq!(config.paths.default_output_dir, "./emails");
+        assert_eq!(config.fallbacks.default_subject, "No Subject");
+        assert_eq!(config.output.index_padding, 5);
     }
 
     // ---------------------------------------------------------------
@@ -332,7 +584,6 @@ mod tests {
         let mail = parse_mail(&messages[2].bytes).unwrap();
 
         let subject = mail.headers.get_first_value("Subject").unwrap();
-        // The subject is Base64-encoded UTF-8; mailparse should decode it.
         assert!(
             subject.contains("Holiday Party RSVP"),
             "Encoded subject should decode to readable text, got: {}",
@@ -360,7 +611,6 @@ mod tests {
         let mail = parse_mail(&messages[1].bytes).unwrap();
         let body = extract_plain_text(&mail);
 
-        // Should get the text/plain part, not the HTML
         assert!(body.contains("A new issue has been opened"), "Should extract plain text part");
         assert!(
             !body.contains("<html>"),
@@ -384,31 +634,31 @@ mod tests {
 
     #[test]
     fn test_sanitise_simple_subject() {
-        assert_eq!(sanitise_filename("Q4 Budget Review"), "Q4 Budget Review");
+        assert_eq!(sanitise_filename("Q4 Budget Review", 80), "Q4 Budget Review");
     }
 
     #[test]
     fn test_sanitise_special_characters() {
-        let result = sanitise_filename("[open-webui/open-webui] Issue #4521: Fails!");
+        let result = sanitise_filename("[open-webui/open-webui] Issue #4521: Fails!", 80);
         assert_eq!(result, "_open-webui_open-webui_ Issue _4521_ Fails_");
     }
 
     #[test]
-    fn test_sanitise_truncates_at_80_chars() {
+    fn test_sanitise_truncates_at_configured_length() {
         let long_subject = "A".repeat(120);
-        let result = sanitise_filename(&long_subject);
-        assert_eq!(result.len(), 80);
+        assert_eq!(sanitise_filename(&long_subject, 80).len(), 80);
+        assert_eq!(sanitise_filename(&long_subject, 50).len(), 50);
+        assert_eq!(sanitise_filename(&long_subject, 120).len(), 120);
     }
 
     #[test]
     fn test_sanitise_empty_string() {
-        assert_eq!(sanitise_filename(""), "");
+        assert_eq!(sanitise_filename("", 80), "");
     }
 
     #[test]
     fn test_sanitise_unicode_emoji() {
-        // Emoji like 🎉 should be replaced with underscores
-        let result = sanitise_filename("🎉 Holiday Party RSVP - Don't Miss Out!");
+        let result = sanitise_filename("🎉 Holiday Party RSVP - Don't Miss Out!", 80);
         assert!(result.contains("Holiday Party RSVP"));
         assert!(!result.contains("🎉"));
     }
@@ -419,8 +669,6 @@ mod tests {
 
     #[test]
     fn test_corrupt_mbox_does_not_panic() {
-        // The most important test: reading an mbox with corrupt messages
-        // must not panic — it should return whatever it can split.
         let messages = read_mbox(&corrupt_fixture_path());
         assert!(
             messages.len() >= 2,
@@ -435,9 +683,6 @@ mod tests {
         let output_dir = TempDir::new().unwrap();
         let (exported, _skipped) = export_messages(&messages, output_dir.path());
 
-        // We expect at least the first and last valid emails to export.
-        // The corrupt/minimal ones may or may not parse — the key point
-        // is that we don't crash and we do get the good ones.
         assert!(
             exported >= 2,
             "Should export at least the 2 clearly valid emails, got {}",
@@ -447,12 +692,10 @@ mod tests {
 
     #[test]
     fn test_valid_emails_survive_after_corruption() {
-        // Verifies that emails appearing AFTER corrupt ones are still exported.
         let messages = read_mbox(&corrupt_fixture_path());
         let output_dir = TempDir::new().unwrap();
         export_messages(&messages, output_dir.path());
 
-        // Look for the "Valid email after corruption" file
         let files: Vec<_> = fs::read_dir(output_dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
@@ -476,7 +719,6 @@ mod tests {
         let output_dir = TempDir::new().unwrap();
         let (exported, skipped) = export_messages(&messages, output_dir.path());
 
-        // exported + skipped should equal the total number of raw messages
         assert_eq!(
             exported + skipped,
             messages.len(),
@@ -486,7 +728,6 @@ mod tests {
             messages.len()
         );
 
-        // The number of files on disk should match the exported count
         let file_count = fs::read_dir(output_dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
@@ -499,7 +740,6 @@ mod tests {
 
     #[test]
     fn test_purely_corrupt_bytes_are_skipped() {
-        // Simulate a completely unparseable message
         let messages = vec![RawMessage {
             bytes: b"This is not an email at all\xff\xfe\x00\x00just garbage bytes".to_vec(),
         }];
@@ -507,8 +747,6 @@ mod tests {
         let output_dir = TempDir::new().unwrap();
         let (exported, skipped) = export_messages(&messages, output_dir.path());
 
-        // It should either skip it or export it with best-effort headers.
-        // The critical thing is it must not panic.
         assert_eq!(
             exported + skipped,
             1,
@@ -517,7 +755,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // End-to-end integration test
+    // End-to-end integration tests
     // ---------------------------------------------------------------
 
     #[test]
@@ -527,18 +765,15 @@ mod tests {
 
         let (exported, skipped) = export_messages(&messages, output_dir.path());
 
-        // Verify correct counts
         assert_eq!(exported, 3);
         assert_eq!(skipped, 0);
 
-        // Verify files exist on disk
         let files: Vec<_> = fs::read_dir(output_dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
             .collect();
         assert_eq!(files.len(), 3, "Should have written 3 .txt files");
 
-        // Verify first file content
         let first_file = output_dir.path().join("00000_Q4 Budget Review.txt");
         assert!(first_file.exists(), "First output file should exist");
 
@@ -550,15 +785,44 @@ mod tests {
     }
 
     #[test]
+    fn test_export_with_custom_config() {
+        let messages = read_mbox(&fixture_path());
+        let output_dir = TempDir::new().unwrap();
+
+        let mut config = Config::default();
+        config.output.file_extension = "md".to_string();
+        config.output.filename_pattern = "email-{index}-{subject}.{ext}".to_string();
+        config.output.index_padding = 3;
+        config.output.file_template =
+            "# {subject}\\nFrom: {from}\\nDate: {date}\\n\\n{body}".to_string();
+
+        let (exported, _) = export_messages_with_config(&messages, output_dir.path(), &config);
+        assert_eq!(exported, 3);
+
+        // Check that custom filename pattern was used
+        let first_file = output_dir.path().join("email-000-Q4 Budget Review.md");
+        assert!(
+            first_file.exists(),
+            "File should use custom pattern: {:?}",
+            fs::read_dir(output_dir.path())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+        );
+
+        // Check that custom template was used
+        let content = fs::read_to_string(&first_file).unwrap();
+        assert!(content.starts_with("# Q4 Budget Review\n"), "Should use markdown heading template");
+    }
+
+    #[test]
     fn test_output_files_are_valid_for_rag_upload() {
-        // Ensures the output format matches what Open WebUI expects:
-        // structured metadata header followed by body text.
         let messages = read_mbox(&fixture_path());
         let output_dir = TempDir::new().unwrap();
 
         export_messages(&messages, output_dir.path());
 
-        // Read each output file and verify structure
         for entry in fs::read_dir(output_dir.path()).unwrap() {
             let entry = entry.unwrap();
             let path = entry.path();
