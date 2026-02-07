@@ -11,6 +11,7 @@ see: https://docs.openwebui.com/
 Performance tested on an Apple M5. Takes ~10 seconds to parse a 7GB mbox archive 
 containing 50'000 emails.
 
+Corrupt emails cause warnings and are skipped.
 
 # Prerequisites 
 
@@ -31,7 +32,7 @@ source ~/.zshrc`
 `cargo build --release`
 
 ## 3. Run it against your mbox file
-`./target/release/mbox-to-text /path/to/your/mail.mbox ./emails`
+`./target/release/gmail-to-rag /path/to/your/mail.mbox ./emails`
 
 ## 4. Import into Open WebUI
 
