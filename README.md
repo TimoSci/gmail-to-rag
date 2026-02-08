@@ -2,7 +2,7 @@
 
 # About
 
-This ultra-fast parsing tool converts a Gmail Takeout `.mbox` archive 
+This fast parsing tool converts a Gmail Takeout `.mbox` archive 
 to a folder containig individual email `.txt` files, suitable for importing as
 a Retrieval-Augmented Generation (RAG) Knowledge in Open WebUI.
 
@@ -11,19 +11,20 @@ see: https://docs.openwebui.com/
 Performance tested on an Apple M5. Takes ~10 seconds to parse a 7GB mbox archive 
 containing 50'000 emails.
 
-Corrupt emails cause warnings and are skipped.
+Graceful failure: Corrupt emails cause warnings and are skipped.
 
 # Prerequisites 
 
 ## Rust
 
-If you don't have Rust installed yet:
-
-`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.zshrc`
+If you don't have Rust installed yet, install via Rustup:
+`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 
 
 # Usage
+
+## Optional: Change defaults in configuration file
+Edit `Config.toml`
 
 ## 1. Navigate into the project
 `cd gmail-to-rag`
