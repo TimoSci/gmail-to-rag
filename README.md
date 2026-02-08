@@ -8,7 +8,7 @@ a Retrieval-Augmented Generation (RAG) Knowledge in Open WebUI.
 
 see: https://docs.openwebui.com/
 
-Performance tested on an Apple M5. Takes ~10 seconds to parse a 7GB mbox archive 
+Performance tested on an Apple M5. Takes ~15 seconds to parse a 7GB mbox archive 
 containing 50'000 emails.
 
 Graceful failure: Corrupt emails cause warnings and are skipped.
